@@ -9,7 +9,7 @@ import { Send, Linkedin, Twitter, AlertCircle, LogOut } from "lucide-react";
 // --- Configuration ---
 const LINKEDIN_CHAR_LIMIT = 3000;
 const TWITTER_CHAR_LIMIT = 280;
-const API_BASE_URL = 'http://localhost:3001';
+const API_BASE_URL = 'https://connector-alpha.vercel.app';
 
 export default function SocialConnector() {
   const [content, setContent] = useState("");

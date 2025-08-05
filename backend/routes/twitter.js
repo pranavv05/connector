@@ -3,90 +3,92 @@
 const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
 const router = express.Router();
+const multer = require('multer');
 
-// Initialize the client with your app's credentials
+// --- Multer Configuration ---
+// Use memoryStorage to hold the file buffer before uploading to Twitter
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+
+// --- Twitter Client & Config ---
 const client = new TwitterApi({
   clientId: process.env.TWITTER_CLIENT_ID,
   clientSecret: process.env.TWITTER_CLIENT_SECRET,
 });
-
-// The callback URL is now a fixed backend route.
-// It MUST match the URL you register in the Twitter Developer Portal.
 const callbackURL = `${process.env.BACKEND_URL}/api/twitter/callback`;
-
-// Temporary store for security tokens. In a real production app, use a database or Redis.
 const tempStore = {};
 
-// --- Route to start the authentication flow ---
+// --- Authentication & Callback Routes (Unchanged) ---
 router.get('/auth', (req, res) => {
-  // Generate the OAuth 2.0 Authorization URL
   const { url, codeVerifier, state } = client.generateOAuth2AuthLink(
     callbackURL,
     { scope: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'] }
   );
-
-  // Store the security tokens to be used in the callback
   tempStore.codeVerifier = codeVerifier;
   tempStore.state = state;
-
-  // Redirect the user to Twitter's authorization page
   res.redirect(url);
 });
 
-// --- Callback route that Twitter redirects to ---
-// This endpoint is now hit by Twitter directly.
 router.get('/callback', async (req, res) => {
   try {
     const { state, code } = req.query;
     const { codeVerifier, state: storedState } = tempStore;
-
-    // Verify that the state matches to prevent CSRF attacks
     if (!state || !code || !storedState || !codeVerifier || state !== storedState) {
       throw new Error('You denied the app or your session expired!');
     }
-
-    // Exchange the authorization code for an access token
     const { accessToken } = await client.loginWithOAuth2({
       code,
       codeVerifier,
       redirectUri: callbackURL,
     });
-    
-    // THE FINAL STEP: Redirect the user back to the frontend with the token.
     res.redirect(`${process.env.FRONTEND_URL}?twitter_token=${accessToken}`);
-
   } catch (error) {
     console.error('Twitter OAuth error:', error);
-    // If something goes wrong, redirect to frontend with a generic error
     res.redirect(`${process.env.FRONTEND_URL}?error=twitter_failed`);
   }
 });
 
-// --- Route to post a tweet (This remains the same) ---
-router.post('/post', async (req, res) => {
+// --- UPDATED Route to post a tweet (with media handling) ---
+// Add the `upload.single('media')` middleware to handle file uploads
+router.post('/post', upload.single('media'), async (req, res) => {
   const { content, accessToken } = req.body;
+  const file = req.file; // The file object from multer
 
   if (!accessToken) {
-    return res.status(401).json({ error: 'User is not authenticated.' });
+    return res.status(401).json({ details: 'User is not authenticated.' });
   }
-  if (!content) {
-    return res.status(400).json({ error: 'Tweet content cannot be empty.' });
+  if ((!content || !content.trim()) && !file) {
+    return res.status(400).json({ details: 'Tweet content or a media file is required.' });
   }
 
   try {
-    // Create a new, temporary client using the user's accessToken
     const userClient = new TwitterApi(accessToken);
+    let postResult;
 
-    // Post the tweet on behalf of the user
-    const postResult = await userClient.v2.tweet(content);
+    // --- LOGIC FOR MEDIA TWEETS ---
+    if (file) {
+      // Step 1: Upload the media. The `uploadMedia` method needs the raw file buffer.
+      const mediaId = await userClient.v1.uploadMedia(file.buffer, { mimeType: file.mimetype });
+
+      // Step 2: Post the tweet and attach the `media_id` obtained in Step 1.
+      postResult = await userClient.v2.tweet(content || '', {
+        media: { media_ids: [mediaId] }
+      });
+    
+    // --- LOGIC FOR TEXT-ONLY TWEETS ---
+    } else {
+      postResult = await userClient.v2.tweet(content);
+    }
     
     res.status(200).json({
       message: 'Tweet posted successfully!',
       data: postResult.data,
     });
   } catch (error) {
-    console.error('Error posting tweet:', error);
-    res.status(500).json({ error: 'Failed to post tweet.', details: error.message });
+    // Provide more specific error details from the Twitter API if available
+    const errorDetails = error.data?.detail || error.message || 'An unknown error occurred.';
+    console.error('Error posting tweet:', errorDetails);
+    res.status(500).json({ error: 'Failed to post tweet.', details: errorDetails });
   }
 });
 

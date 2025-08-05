@@ -3,119 +3,153 @@
 const express = require('express');
 const axios = require('axios');
 const router = express.Router();
+const multer = require('multer');
 
+// --- Multer Configuration ---
+// Use memoryStorage to hold the file buffer temporarily before uploading
+const storage = multer.memoryStorage();
+const upload = multer({ storage: storage });
+
+// --- LinkedIn API Constants & Config ---
 const LINKEDIN_AUTH_URL = 'https://www.linkedin.com/oauth/v2/authorization';
 const LINKEDIN_TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken';
 const LINKEDIN_API_URL = 'https://api.linkedin.com/v2';
-
 const linkedinClientId = process.env.LINKEDIN_CLIENT_ID;
 const linkedinClientSecret = process.env.LINKEDIN_CLIENT_SECRET;
-
-// The callback URI is now a fixed backend route.
-// It MUST match the URL you register in the LinkedIn Developer Portal.
 const redirectUri = `${process.env.BACKEND_URL}/api/linkedin/callback`;
 
-// --- Route to start the authentication flow ---
+// --- Authentication & Callback Routes (Unchanged) ---
 router.get('/auth', (req, res) => {
-  // Use the OpenID scopes to match your LinkedIn App Product
   const scope = 'openid profile w_member_social';
-  
   const params = new URLSearchParams({
     response_type: 'code',
     client_id: linkedinClientId,
-    redirect_uri: redirectUri, // This now correctly points to our backend callback
+    redirect_uri: redirectUri,
     scope: scope, 
-    state: 'random_state_string_for_linkedin' // Use a unique state
+    state: 'random_state_string_for_linkedin'
   });
-
-  // Redirect the user to LinkedIn's authorization page
   res.redirect(`${LINKEDIN_AUTH_URL}?${params.toString()}`);
 });
 
-// --- Callback route that LinkedIn redirects to ---
-// This endpoint is now hit by LinkedIn directly.
 router.get('/callback', async (req, res) => {
   try {
     const { code } = req.query;
-
     if (!code) {
-        console.error("LinkedIn callback is missing authorization code.", req.query);
-        // Redirect to frontend with an error message
-        return res.redirect(`${process.env.FRONTEND_URL}?error=linkedin_auth_failed`);
+      return res.redirect(`${process.env.FRONTEND_URL}?error=linkedin_auth_failed`);
     }
-    
-    // Exchange the authorization code for an access token
     const tokenResponse = await axios.post(
       LINKEDIN_TOKEN_URL,
       new URLSearchParams({
         grant_type: 'authorization_code',
         code,
-        redirect_uri: redirectUri, // This must match the URI used in the /auth route
+        redirect_uri: redirectUri,
         client_id: linkedinClientId,
         client_secret: linkedinClientSecret
       }),
       { headers: { 'Content-Type': 'application/x-www-form-urlencoded' } }
     );
-
-    const { access_token, expires_in } = tokenResponse.data;
-    
-    // THE FINAL STEP: Redirect the user back to the frontend with the token.
-    res.redirect(`${process.env.FRONTEND_URL}?linkedin_token=${access_token}&expires_in=${expires_in}`);
-    
+    const { access_token } = tokenResponse.data;
+    res.redirect(`${process.env.FRONTEND_URL}?linkedin_token=${access_token}`);
   } catch (error) {
     console.error('LinkedIn OAuth error:', error.response?.data || error.message);
-    // If something goes wrong, redirect to frontend with a generic error
     res.redirect(`${process.env.FRONTEND_URL}?error=linkedin_token_failed`);
   }
 });
 
-// --- Helper function to get User ID ---
-// This is the single, correct function for the OpenID Connect flow
+// --- Helper function to get User ID (Unchanged) ---
 async function getLinkedInUserId(accessToken) {
     try {
-        // Use the /userinfo endpoint which is authorized by the 'openid' and 'profile' scopes
         const response = await axios.get('https://api.linkedin.com/v2/userinfo', {
           headers: { 'Authorization': `Bearer ${accessToken}` }
         });
-        // The user's ID is in the 'sub' (subject) field for OpenID responses
         return response.data.sub;
-      } catch (error) {
-        console.error('Error getting LinkedIn user ID from /userinfo:', error.response?.data || error.message);
-        throw new Error('Failed to get LinkedIn user ID');
-      }
+    } catch (error) {
+        console.error('Error getting LinkedIn user ID:', error.response?.data || error.message);
+        throw new Error('Failed to get LinkedIn user ID. Token may be expired.');
+    }
 }
 
-// --- Route to post content to LinkedIn ---
-router.post('/post', async (req, res) => {
+// --- UPDATED Route to post content (with media handling) ---
+// We add the `upload.single('media')` middleware to process the file
+router.post('/post', upload.single('media'), async (req, res) => {
   try {
     const { content, accessToken } = req.body;
-    
-    if (!content || !accessToken) {
-      return res.status(400).json({ error: 'Content and access token are required' });
+    const file = req.file; // The file object from multer
+
+    if ((!content || !content.trim()) && !file) {
+      return res.status(400).json({ details: 'Content or a media file is required.' });
+    }
+    if (!accessToken) {
+      return res.status(400).json({ details: 'Access token is required.' });
     }
 
-    // This will now call the single, correct getLinkedInUserId function
     const userId = await getLinkedInUserId(accessToken);
+    const authorUrn = `urn:li:person:${userId}`;
+    let postBody = {};
 
-    const postResponse = await axios.post(
-      `${LINKEDIN_API_URL}/ugcPosts`,
-      {
-        author: `urn:li:person:${userId}`,
+    // --- LOGIC FOR MEDIA POSTS ---
+    if (file) {
+      // STEP A: Register the upload to get an upload URL
+      const registerUploadResponse = await axios.post(
+        `${LINKEDIN_API_URL}/assets?action=registerUpload`,
+        {
+          registerUploadRequest: {
+            recipes: [file.mimetype.startsWith('image/') ? "urn:li:digitalmediaRecipe:feedshare-image" : "urn:li:digitalmediaRecipe:feedshare-video"],
+            owner: authorUrn,
+            serviceRelationships: [{ relationshipType: "OWNER", identifier: "urn:li:userGeneratedContent" }]
+          }
+        },
+        { headers: { 'Authorization': `Bearer ${accessToken}` } }
+      );
+
+      const uploadUrl = registerUploadResponse.data.value.uploadMechanism['com.linkedin.digitalmedia.uploading.MediaUploadHttpRequest'].uploadUrl;
+      const assetUrn = registerUploadResponse.data.value.asset;
+
+      // STEP B: Upload the file's raw data (buffer) to the URL from Step A
+      await axios.put(uploadUrl, file.buffer, {
+        headers: { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': file.mimetype }
+      });
+
+      // STEP C: Construct the final post body, referencing the uploaded asset
+      postBody = {
+        author: authorUrn,
         lifecycleState: 'PUBLISHED',
         specificContent: {
-          'com.linkedin.ugc.ShareContent': { shareCommentary: { text: content }, shareMediaCategory: 'NONE' }
+          'com.linkedin.ugc.ShareContent': {
+            shareCommentary: { text: content || "" },
+            shareMediaCategory: file.mimetype.startsWith('image/') ? "IMAGE" : "VIDEO",
+            media: [{ status: 'READY', media: assetUrn }]
+          }
         },
         visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' }
-      },
-      { headers: { 'Authorization': `Bearer ${accessToken}`, 'X-Restli-Protocol-Version': '2.0.0' } }
-    );
+      };
+    
+    // --- LOGIC FOR TEXT-ONLY POSTS ---
+    } else {
+      postBody = {
+        author: authorUrn,
+        lifecycleState: 'PUBLISHED',
+        specificContent: {
+          'com.linkedin.ugc.ShareContent': {
+            shareCommentary: { text: content },
+            shareMediaCategory: 'NONE'
+          }
+        },
+        visibility: { 'com.linkedin.ugc.MemberNetworkVisibility': 'PUBLIC' }
+      };
+    }
+
+    // --- Execute the final post creation API call ---
+    const postResponse = await axios.post(`${LINKEDIN_API_URL}/ugcPosts`, postBody, {
+      headers: { 'Authorization': `Bearer ${accessToken}`, 'X-Restli-Protocol-Version': '2.0.0' }
+    });
 
     res.json({ success: true, message: 'Successfully posted to LinkedIn', data: postResponse.data });
 
   } catch (error) {
-    // Now this will catch the error from the correct helper function
-    console.error('LinkedIn posting error:', error.message);
-    res.status(500).json({ error: 'Failed to post to LinkedIn', details: error.message });
+    const errorDetails = error.response?.data?.message || error.message || 'An internal error occurred.';
+    console.error('LinkedIn posting error:', errorDetails);
+    res.status(500).json({ error: 'Failed to post to LinkedIn', details: errorDetails });
   }
 });
 

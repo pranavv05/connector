@@ -1,0 +1,253 @@
+import { useState, useEffect } from "react";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import { Badge } from "@/components/ui/badge";
+import { useToast } from "@/hooks/use-toast";
+import { Send, Linkedin, Twitter, AlertCircle, LogOut } from "lucide-react";
+
+// --- Configuration ---
+const LINKEDIN_CHAR_LIMIT = 3000;
+const TWITTER_CHAR_LIMIT = 280;
+const API_BASE_URL = 'http://localhost:3001';
+
+export default function SocialConnector() {
+  const [content, setContent] = useState("");
+  const [isPosting, setIsPosting] = useState(false);
+  const [linkedinToken, setLinkedinToken] = useState(null);
+  const [twitterToken, setTwitterToken] = useState(null);
+  const { toast } = useToast();
+
+  // --- Effect to handle ALL OAuth redirects ---
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+    const linkedinTokenFromUrl = params.get('linkedin_token');
+
+    // --- Handle LinkedIn Legacy Token Flow ---
+    if (linkedinTokenFromUrl) {
+      setLinkedinToken(linkedinTokenFromUrl);
+      localStorage.setItem('linkedin_access_token', linkedinTokenFromUrl);
+      window.history.replaceState({}, document.title, window.location.pathname);
+      toast({
+        title: "LinkedIn Connected!",
+        description: "You can now post to your LinkedIn account.",
+      });
+    }
+
+    // --- Handle Twitter OAuth 2.0 Flow ---
+    if (code && state) {
+      const handleTwitterCallback = async () => {
+        try {
+          const response = await fetch(`${API_BASE_URL}/api/twitter/callback`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code: code, state: state }),
+          });
+
+          const result = await response.json();
+          if (!response.ok) {
+            throw new Error(result.error || 'Failed to exchange token.');
+          }
+
+          setTwitterToken(result.accessToken);
+          localStorage.setItem('twitter_access_token', result.accessToken);
+          toast({
+            title: "Twitter Connected!",
+            description: "You can now post to your Twitter account.",
+          });
+
+        } catch (error) {
+          console.error("Twitter auth error:", error);
+          toast({
+            title: "Twitter Connection Failed",
+            description: error.message,
+            variant: "destructive",
+          });
+        } finally {
+          window.history.replaceState({}, document.title, window.location.pathname);
+        }
+      };
+      handleTwitterCallback();
+    }
+  }, [toast]);
+
+  // --- Effect to check for stored tokens on load ---
+  useEffect(() => {
+    const storedLinkedinToken = localStorage.getItem('linkedin_access_token');
+    if (storedLinkedinToken) {
+      setLinkedinToken(storedLinkedinToken);
+    }
+    const storedTwitterToken = localStorage.getItem('twitter_access_token');
+    if (storedTwitterToken) {
+      setTwitterToken(storedTwitterToken);
+    }
+  }, []);
+
+  // --- Character counts and limits ---
+  const linkedinCount = content.length;
+  const twitterCount = content.length;
+  const isTwitterOverLimit = twitterCount > TWITTER_CHAR_LIMIT;
+  const isLinkedinOverLimit = linkedinCount > LINKEDIN_CHAR_LIMIT;
+
+  // --- Login Handlers ---
+  const handleLinkedInLogin = () => {
+    window.location.href = `${API_BASE_URL}/api/linkedin/auth`;
+  };
+  const handleTwitterLogin = () => {
+    window.location.href = `${API_BASE_URL}/api/twitter/auth`;
+  };
+  
+  // --- Logout Handler ---
+  const handleLogout = (platform) => {
+    if (platform === 'linkedin') {
+      setLinkedinToken(null);
+      localStorage.removeItem('linkedin_access_token');
+      toast({ title: "Disconnected from LinkedIn" });
+    }
+    if (platform === 'twitter') {
+      setTwitterToken(null);
+      localStorage.removeItem('twitter_access_token');
+      toast({ title: "Disconnected from Twitter" });
+    }
+  };
+
+  // --- Main Post Handler ---
+  const handlePost = async (platform) => {
+    if (!content.trim()) {
+      toast({ title: "Content Required", description: "Please enter some content to post.", variant: "destructive" });
+      return;
+    }
+
+    setIsPosting(true);
+    let success = false;
+    try {
+      if (platform === 'linkedin') {
+        if (isLinkedinOverLimit) throw new Error("Your post is too long for LinkedIn.");
+        if (!linkedinToken) throw new Error("Please connect your LinkedIn account first.");
+
+        const response = await fetch(`${API_BASE_URL}/api/linkedin/post`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: content, accessToken: linkedinToken }),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.details || 'Failed to post to LinkedIn.');
+        
+        toast({ title: "Posted to LinkedIn!", description: "Your content has been shared successfully." });
+        success = true;
+      }
+
+      if (platform === 'twitter') {
+        if (isTwitterOverLimit) throw new Error("Your post is too long for Twitter.");
+        if (!twitterToken) throw new Error("Please connect your Twitter account first.");
+
+        const response = await fetch(`${API_BASE_URL}/api/twitter/post`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ content: content, accessToken: twitterToken }),
+        });
+
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.details || 'Failed to post to Twitter.');
+
+        toast({ title: "Posted to Twitter!", description: "Your content has been shared successfully." });
+        success = true;
+      }
+    } catch (error) {
+      console.error('Posting Error:', error);
+      toast({ title: "Posting Failed", description: error.message, variant: "destructive" });
+    } finally {
+      setIsPosting(false);
+      if (success) {
+        setContent("");
+      }
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-background via-muted/20 to-background">
+      <div className="container mx-auto px-4 py-8">
+        <div className="max-w-4xl mx-auto space-y-8">
+          {/* Header */}
+          <div className="text-center space-y-4">
+            <h1 className="text-4xl font-bold bg-gradient-to-r from-linkedin via-primary to-twitter bg-clip-text text-transparent">
+              Social Media Connector
+            </h1>
+            <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+              Write once, post everywhere. Connect your social accounts to share content instantly.
+            </p>
+          </div>
+
+          {/* Connection Status Section */}
+          <div className="space-y-4">
+            {!linkedinToken && (
+              <Card className="border-2 border-dashed border-linkedin/50 bg-linkedin/5">
+                <CardContent className="flex items-center justify-between p-6">
+                  <div className="flex items-center space-x-3"><AlertCircle className="h-5 w-5 text-linkedin" /><div><p className="font-medium">Connect Your LinkedIn Account</p><p className="text-sm text-muted-foreground">Click to connect your LinkedIn account.</p></div></div>
+                  <Button onClick={handleLinkedInLogin} className="gap-2 bg-linkedin hover:bg-linkedin-hover text-white"><Linkedin className="h-4 w-4" />Connect to LinkedIn</Button>
+                </CardContent>
+              </Card>
+            )}
+            {!twitterToken && (
+              <Card className="border-2 border-dashed border-twitter/50 bg-twitter/5">
+                <CardContent className="flex items-center justify-between p-6">
+                  <div className="flex items-center space-x-3"><AlertCircle className="h-5 w-5 text-twitter" /><div><p className="font-medium">Connect Your Twitter Account</p><p className="text-sm text-muted-foreground">Click to connect your Twitter account.</p></div></div>
+                  <Button onClick={handleTwitterLogin} className="gap-2 bg-twitter hover:bg-twitter-hover text-white"><Twitter className="h-4 w-4" />Connect to Twitter</Button>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+          
+          {/* Main Composer Card */}
+          <Card className="shadow-[0_0_30px_-5px] shadow-primary/10">
+            <CardHeader>
+              <CardTitle className="flex items-center gap-2"><Send className="h-5 w-5" />Compose Your Post</CardTitle>
+              <CardDescription>Write your content below. Connect an account to enable the post buttons.</CardDescription>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <Textarea
+                placeholder="What's on your mind?..."
+                value={content}
+                onChange={(e) => setContent(e.target.value)}
+                className="min-h-[120px] resize-none border-2 focus:border-primary/50"
+              />
+              <div className="grid md:grid-cols-2 gap-6">
+                {/* LinkedIn Card */}
+                <Card className="border-linkedin/20 bg-gradient-to-br from-linkedin/5 to-transparent">
+                  <CardHeader className="pb-3 flex-row items-center justify-between">
+                    <div className="flex items-center gap-2"><Linkedin className="h-5 w-5 text-linkedin" /><span className="font-medium">LinkedIn</span></div>
+                    {linkedinToken && <Button onClick={() => handleLogout('linkedin')} variant="ghost" size="sm" className="gap-1 text-xs"><LogOut className="h-3 w-3" />Logout</Button>}
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-4">
+                    <div className="bg-background/50 rounded-lg p-4 min-h-[100px] border border-linkedin/10"><p className="text-sm whitespace-pre-wrap break-words">{content || "Post preview..."}</p></div>
+                    <Badge variant={isLinkedinOverLimit ? "destructive" : "secondary"} className="w-full justify-center">{linkedinCount}/{LINKEDIN_CHAR_LIMIT}</Badge>
+                    <Button onClick={() => handlePost('linkedin')} disabled={isPosting || !content.trim() || isLinkedinOverLimit || !linkedinToken} className="w-full bg-linkedin hover:bg-linkedin-hover text-white">
+                      {isPosting ? <><div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />Posting...</> : <><Linkedin className="h-4 w-4 mr-2" />{!linkedinToken ? 'Connect to Post' : 'Post to LinkedIn'}</>}
+                    </Button>
+                  </CardContent>
+                </Card>
+
+                {/* Twitter Card */}
+                <Card className="border-twitter/20 bg-gradient-to-br from-twitter/5 to-transparent">
+                  <CardHeader className="pb-3 flex-row items-center justify-between">
+                    <div className="flex items-center gap-2"><Twitter className="h-5 w-5 text-twitter" /><span className="font-medium">Twitter</span></div>
+                    {twitterToken && <Button onClick={() => handleLogout('twitter')} variant="ghost" size="sm" className="gap-1 text-xs"><LogOut className="h-3 w-3" />Logout</Button>}
+                  </CardHeader>
+                  <CardContent className="pt-0 space-y-4">
+                    <div className="bg-background/50 rounded-lg p-4 min-h-[100px] border border-twitter/10"><p className="text-sm whitespace-pre-wrap break-words">{content || "Post preview..."}</p></div>
+                    <Badge variant={isTwitterOverLimit ? "destructive" : "secondary"} className="w-full justify-center">{twitterCount}/{TWITTER_CHAR_LIMIT}</Badge>
+                    <Button onClick={() => handlePost('twitter')} disabled={isPosting || !content.trim() || isTwitterOverLimit || !twitterToken} className="w-full bg-twitter hover:bg-twitter-hover text-white">
+                      {isPosting ? <><div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2" />Posting...</> : <><Twitter className="h-4 w-4 mr-2" />{!twitterToken ? 'Connect to Post' : 'Post to Twitter'}</>}
+                    </Button>
+                  </CardContent>
+                </Card>
+              </div>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+    </div>
+  );
+}

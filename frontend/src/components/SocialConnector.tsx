@@ -5,75 +5,61 @@ import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { useToast } from "@/hooks/use-toast";
 import { Send, Linkedin, Twitter, AlertCircle, LogOut } from "lucide-react";
+import { useLocation, useNavigate } from "react-router-dom"; // You need react-router-dom for this
 
 // --- Configuration ---
 const LINKEDIN_CHAR_LIMIT = 3000;
 const TWITTER_CHAR_LIMIT = 280;
-const API_BASE_URL = 'https://connector-alpha.vercel.app';
+// THE FIX: Use the correct Vite environment variable
+const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
 
 export default function SocialConnector() {
   const [content, setContent] = useState("");
   const [isPosting, setIsPosting] = useState(false);
-  const [linkedinToken, setLinkedinToken] = useState(null);
-  const [twitterToken, setTwitterToken] = useState(null);
+  const [linkedinToken, setLinkedinToken] = useState<string | null>(null);
+  const [twitterToken, setTwitterToken] = useState<string | null>(null);
   const { toast } = useToast();
+  const navigate = useNavigate();
 
-  // --- Effect to handle ALL OAuth redirects ---
+  // --- REWRITTEN AND SIMPLIFIED Effect to handle final token redirects ---
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const code = params.get('code');
-    const state = params.get('state');
     const linkedinTokenFromUrl = params.get('linkedin_token');
+    const twitterTokenFromUrl = params.get('twitter_token');
+    const error = params.get('error');
 
-    // --- Handle LinkedIn Legacy Token Flow ---
+    // Check for a LinkedIn token from our backend's redirect
     if (linkedinTokenFromUrl) {
+      console.log("Detected LinkedIn token from URL.");
       setLinkedinToken(linkedinTokenFromUrl);
       localStorage.setItem('linkedin_access_token', linkedinTokenFromUrl);
-      window.history.replaceState({}, document.title, window.location.pathname);
-      toast({
-        title: "LinkedIn Connected!",
-        description: "You can now post to your LinkedIn account.",
+      toast({ title: "LinkedIn Connected!" });
+      navigate("/", { replace: true }); // Clean the URL
+    }
+
+    // Check for a Twitter token from our backend's redirect
+    if (twitterTokenFromUrl) {
+      console.log("Detected Twitter token from URL.");
+      setTwitterToken(twitterTokenFromUrl);
+      localStorage.setItem('twitter_access_token', twitterTokenFromUrl);
+      toast({ title: "Twitter Connected!" });
+      navigate("/", { replace: true }); // Clean the URL
+    }
+
+    // Check for an error from our backend's redirect
+    if (error) {
+      console.error("Received an error from callback:", error);
+      const serviceName = error.split('_')[0] || 'The service';
+      toast({ 
+        title: "Connection Failed", 
+        description: `Login with ${serviceName.charAt(0).toUpperCase() + serviceName.slice(1)} failed. Please try again.`, 
+        variant: "destructive" 
       });
+      navigate("/", { replace: true }); // Clean the URL
     }
+  }, [toast, navigate]);
 
-    // --- Handle Twitter OAuth 2.0 Flow ---
-    if (code && state) {
-      const handleTwitterCallback = async () => {
-        try {
-          const response = await fetch(`${API_BASE_URL}/api/twitter/callback`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ code: code, state: state }),
-          });
-
-          const result = await response.json();
-          if (!response.ok) {
-            throw new Error(result.error || 'Failed to exchange token.');
-          }
-
-          setTwitterToken(result.accessToken);
-          localStorage.setItem('twitter_access_token', result.accessToken);
-          toast({
-            title: "Twitter Connected!",
-            description: "You can now post to your Twitter account.",
-          });
-
-        } catch (error) {
-          console.error("Twitter auth error:", error);
-          toast({
-            title: "Twitter Connection Failed",
-            description: error.message,
-            variant: "destructive",
-          });
-        } finally {
-          window.history.replaceState({}, document.title, window.location.pathname);
-        }
-      };
-      handleTwitterCallback();
-    }
-  }, [toast]);
-
-  // --- Effect to check for stored tokens on load ---
+  // --- Effect to check for stored tokens on initial page load ---
   useEffect(() => {
     const storedLinkedinToken = localStorage.getItem('linkedin_access_token');
     if (storedLinkedinToken) {
@@ -93,14 +79,22 @@ export default function SocialConnector() {
 
   // --- Login Handlers ---
   const handleLinkedInLogin = () => {
+    if (!API_BASE_URL) {
+      toast({ title: "Configuration Error", description: "API URL is not set.", variant: "destructive" });
+      return;
+    }
     window.location.href = `${API_BASE_URL}/api/linkedin/auth`;
   };
   const handleTwitterLogin = () => {
+    if (!API_BASE_URL) {
+      toast({ title: "Configuration Error", description: "API URL is not set.", variant: "destructive" });
+      return;
+    }
     window.location.href = `${API_BASE_URL}/api/twitter/auth`;
   };
   
   // --- Logout Handler ---
-  const handleLogout = (platform) => {
+  const handleLogout = (platform: 'linkedin' | 'twitter') => {
     if (platform === 'linkedin') {
       setLinkedinToken(null);
       localStorage.removeItem('linkedin_access_token');
@@ -114,7 +108,7 @@ export default function SocialConnector() {
   };
 
   // --- Main Post Handler ---
-  const handlePost = async (platform) => {
+  const handlePost = async (platform: 'linkedin' | 'twitter') => {
     if (!content.trim()) {
       toast({ title: "Content Required", description: "Please enter some content to post.", variant: "destructive" });
       return;
@@ -155,7 +149,7 @@ export default function SocialConnector() {
         toast({ title: "Posted to Twitter!", description: "Your content has been shared successfully." });
         success = true;
       }
-    } catch (error) {
+    } catch (error: any) {
       console.error('Posting Error:', error);
       toast({ title: "Posting Failed", description: error.message, variant: "destructive" });
     } finally {

@@ -1,67 +1,70 @@
-// routes/twitter.js - NEW VERSION FOR USER LOGINS
-// This line takes the URL from your .env and adds the trailing slash
-const CALLBACK_URL = `${process.env.FRONTEND_URL}/`;
+// File: backend/routes/twitter.js
+
 const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
 const router = express.Router();
 
-// 1. Initialize with Client ID and Secret for OAuth 2.0
+// Initialize the client with your app's credentials
 const client = new TwitterApi({
   clientId: process.env.TWITTER_CLIENT_ID,
   clientSecret: process.env.TWITTER_CLIENT_SECRET,
 });
 
-// Temporary store for security tokens. In production, use user sessions.
+// The callback URL is now a fixed backend route.
+// It MUST match the URL you register in the Twitter Developer Portal.
+const callbackURL = `${process.env.BACKEND_URL}/api/twitter/callback`;
+
+// Temporary store for security tokens. In a real production app, use a database or Redis.
 const tempStore = {};
 
-// 2. ROUTE TO START THE LOGIN FLOW
+// --- Route to start the authentication flow ---
 router.get('/auth', (req, res) => {
-  // Generate a unique URL for the user to log in with
+  // Generate the OAuth 2.0 Authorization URL
   const { url, codeVerifier, state } = client.generateOAuth2AuthLink(
-    CALLBACK_URL,
+    callbackURL,
     { scope: ['tweet.read', 'tweet.write', 'users.read', 'offline.access'] }
   );
 
-  // Store the codeVerifier and state to verify the callback later
+  // Store the security tokens to be used in the callback
   tempStore.codeVerifier = codeVerifier;
   tempStore.state = state;
 
-  // Redirect the user to the generated Twitter login page
+  // Redirect the user to Twitter's authorization page
   res.redirect(url);
 });
 
-// 3. ROUTE TO HANDLE THE CALLBACK FROM TWITTER
-router.post('/callback', async (req, res) => {
-  const { state, code } = req.body;
-  const { codeVerifier, state: storedState } = tempStore;
-
-  if (!codeVerifier || !state || !storedState || !code) {
-    return res.status(400).json({ error: 'You denied the app or your session expired!' });
-  }
-  if (state !== storedState) {
-    return res.status(400).json({ error: 'Stored tokens did not match!' });
-  }
-
+// --- Callback route that Twitter redirects to ---
+// This endpoint is now hit by Twitter directly.
+router.get('/callback', async (req, res) => {
   try {
+    const { state, code } = req.query;
+    const { codeVerifier, state: storedState } = tempStore;
+
+    // Verify that the state matches to prevent CSRF attacks
+    if (!state || !code || !storedState || !codeVerifier || state !== storedState) {
+      throw new Error('You denied the app or your session expired!');
+    }
+
     // Exchange the authorization code for an access token
-    const { accessToken, refreshToken } = await client.loginWithOAuth2({
+    const { accessToken } = await client.loginWithOAuth2({
       code,
       codeVerifier,
-      redirectUri: CALLBACK_URL,
+      redirectUri: callbackURL,
     });
     
-    // IMPORTANT: Return the access token to the frontend
-    res.status(200).json({ accessToken, refreshToken });
+    // THE FINAL STEP: Redirect the user back to the frontend with the token.
+    res.redirect(`${process.env.FRONTEND_URL}?twitter_token=${accessToken}`);
 
   } catch (error) {
-    console.error('Error in Twitter callback:', error);
-    res.status(500).json({ error: 'Failed to get access token from Twitter' });
+    console.error('Twitter OAuth error:', error);
+    // If something goes wrong, redirect to frontend with a generic error
+    res.redirect(`${process.env.FRONTEND_URL}?error=twitter_failed`);
   }
 });
 
-// 4. ROUTE TO POST A TWEET (NOW REQUIRES A USER'S ACCESS TOKEN)
+// --- Route to post a tweet (This remains the same) ---
 router.post('/post', async (req, res) => {
-  const { content, accessToken } = req.body; // Expect accessToken from frontend
+  const { content, accessToken } = req.body;
 
   if (!accessToken) {
     return res.status(401).json({ error: 'User is not authenticated.' });

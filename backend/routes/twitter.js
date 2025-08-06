@@ -1,59 +1,23 @@
 // File: backend/routes/twitter.js
 // Developer: Gemini (Experienced Developer)
-// Version: 2.0 - With Thread Handling
+// Version: 3.0 - With Manual Thread Handling
 
 const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
 const router = express.Router();
 const multer = require('multer');
 
-// --- Multer Configuration ---
-// Use memoryStorage to hold the file buffer before uploading to Twitter
+// --- Multer Configuration (Unchanged) ---
 const storage = multer.memoryStorage();
 const upload = multer({ storage: storage });
 
-// --- Twitter Client & Config ---
+// --- Twitter Client & Config (Unchanged) ---
 const client = new TwitterApi({
   clientId: process.env.TWITTER_CLIENT_ID,
   clientSecret: process.env.TWITTER_CLIENT_SECRET,
 });
 const callbackURL = `${process.env.BACKEND_URL}/api/twitter/callback`;
 const tempStore = {};
-
-// --- NEW: Helper function to split text for threads ---
-const splitTextIntoChunks = (text, limit = 280) => {
-  const words = text.split(' ');
-  const chunks = [];
-  let currentChunk = '';
-
-  words.forEach(word => {
-    if ((currentChunk + ' ' + word).trim().length > limit) {
-      chunks.push(currentChunk.trim());
-      currentChunk = word;
-    } else {
-      currentChunk = (currentChunk + ' ' + word).trim();
-    }
-  });
-
-  if (currentChunk) {
-    chunks.push(currentChunk);
-  }
-
-  // Add numbering (e.g., 1/n) to each chunk
-  const totalChunks = chunks.length;
-  if (totalChunks > 1) {
-    return chunks.map((chunk, index) => {
-      const number = `(${index + 1}/${totalChunks})`;
-      const remainingSpace = limit - (number.length + 1);
-      if (chunk.length > remainingSpace) {
-        return chunk.substring(0, remainingSpace - 3) + '... ' + number;
-      }
-      return `${chunk} ${number}`;
-    });
-  }
-
-  return chunks;
-};
 
 
 // --- Authentication & Callback Routes (Unchanged) ---
@@ -86,15 +50,20 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-// --- UPDATED Route to post a tweet (with media and thread handling) ---
+// --- UPDATED Route to handle single tweets, media, and now MANUAL threads ---
 router.post('/post', upload.single('media'), async (req, res) => {
-  const { content, accessToken, isThread } = req.body;
-  const file = req.file; // The file object from multer
+  // --- UPDATED: Look for `tweets` array for threads ---
+  const { content, accessToken, tweets } = req.body;
+  const file = req.file; 
 
   if (!accessToken) {
     return res.status(401).json({ details: 'User is not authenticated.' });
   }
-  if ((!content || !content.trim()) && !file) {
+
+  // Check if any form of content exists
+  const hasThreadContent = tweets && JSON.parse(tweets).length > 0;
+  const hasSingleTweetContent = content && content.trim();
+  if (!hasThreadContent && !hasSingleTweetContent && !file) {
     return res.status(400).json({ details: 'Post content or a media file is required.' });
   }
 
@@ -102,12 +71,13 @@ router.post('/post', upload.single('media'), async (req, res) => {
     const userClient = new TwitterApi(accessToken);
     let finalResult;
 
-    // --- NEW: LOGIC FOR THREADS ---
-    if (isThread === 'true') {
-      if (!content) {
-        return res.status(400).json({ details: 'Cannot post an empty thread.' });
+    // --- NEW LOGIC: Handle manual thread from frontend `tweets` array ---
+    if (hasThreadContent) {
+      const tweetChunks = JSON.parse(tweets);
+      if (!Array.isArray(tweetChunks) || tweetChunks.length === 0) {
+        return res.status(400).json({ details: 'Invalid thread format received.' });
       }
-      const tweetChunks = splitTextIntoChunks(content);
+      
       let lastTweetID = null;
 
       // Use a for...of loop to post sequentially, as each tweet depends on the previous one
@@ -119,7 +89,7 @@ router.post('/post', upload.single('media'), async (req, res) => {
         
         const result = await userClient.v2.tweet(chunk, tweetOptions);
         lastTweetID = result.data.id;
-        finalResult = result; // Store the last tweet's result
+        finalResult = result; // Store the last tweet's result to send back
       }
     
     // --- EXISTING LOGIC FOR MEDIA TWEETS (Unchanged) ---

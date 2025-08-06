@@ -1,4 +1,6 @@
 // File: backend/routes/twitter.js
+// Developer: Gemini (Experienced Developer)
+// Version: 2.0 - With Thread Handling
 
 const express = require('express');
 const { TwitterApi } = require('twitter-api-v2');
@@ -17,6 +19,42 @@ const client = new TwitterApi({
 });
 const callbackURL = `${process.env.BACKEND_URL}/api/twitter/callback`;
 const tempStore = {};
+
+// --- NEW: Helper function to split text for threads ---
+const splitTextIntoChunks = (text, limit = 280) => {
+  const words = text.split(' ');
+  const chunks = [];
+  let currentChunk = '';
+
+  words.forEach(word => {
+    if ((currentChunk + ' ' + word).trim().length > limit) {
+      chunks.push(currentChunk.trim());
+      currentChunk = word;
+    } else {
+      currentChunk = (currentChunk + ' ' + word).trim();
+    }
+  });
+
+  if (currentChunk) {
+    chunks.push(currentChunk);
+  }
+
+  // Add numbering (e.g., 1/n) to each chunk
+  const totalChunks = chunks.length;
+  if (totalChunks > 1) {
+    return chunks.map((chunk, index) => {
+      const number = `(${index + 1}/${totalChunks})`;
+      const remainingSpace = limit - (number.length + 1);
+      if (chunk.length > remainingSpace) {
+        return chunk.substring(0, remainingSpace - 3) + '... ' + number;
+      }
+      return `${chunk} ${number}`;
+    });
+  }
+
+  return chunks;
+};
+
 
 // --- Authentication & Callback Routes (Unchanged) ---
 router.get('/auth', (req, res) => {
@@ -48,47 +86,66 @@ router.get('/callback', async (req, res) => {
   }
 });
 
-// --- UPDATED Route to post a tweet (with media handling) ---
-// Add the `upload.single('media')` middleware to handle file uploads
+// --- UPDATED Route to post a tweet (with media and thread handling) ---
 router.post('/post', upload.single('media'), async (req, res) => {
-  const { content, accessToken } = req.body;
+  const { content, accessToken, isThread } = req.body;
   const file = req.file; // The file object from multer
 
   if (!accessToken) {
     return res.status(401).json({ details: 'User is not authenticated.' });
   }
   if ((!content || !content.trim()) && !file) {
-    return res.status(400).json({ details: 'Tweet content or a media file is required.' });
+    return res.status(400).json({ details: 'Post content or a media file is required.' });
   }
 
   try {
     const userClient = new TwitterApi(accessToken);
-    let postResult;
+    let finalResult;
 
-    // --- LOGIC FOR MEDIA TWEETS ---
-    if (file) {
+    // --- NEW: LOGIC FOR THREADS ---
+    if (isThread === 'true') {
+      if (!content) {
+        return res.status(400).json({ details: 'Cannot post an empty thread.' });
+      }
+      const tweetChunks = splitTextIntoChunks(content);
+      let lastTweetID = null;
+
+      // Use a for...of loop to post sequentially, as each tweet depends on the previous one
+      for (const chunk of tweetChunks) {
+        const tweetOptions = {};
+        if (lastTweetID) {
+          tweetOptions.reply = { in_reply_to_tweet_id: lastTweetID };
+        }
+        
+        const result = await userClient.v2.tweet(chunk, tweetOptions);
+        lastTweetID = result.data.id;
+        finalResult = result; // Store the last tweet's result
+      }
+    
+    // --- EXISTING LOGIC FOR MEDIA TWEETS (Unchanged) ---
+    } else if (file) {
       // Step 1: Upload the media. The `uploadMedia` method needs the raw file buffer.
       const mediaId = await userClient.v1.uploadMedia(file.buffer, { mimeType: file.mimetype });
 
       // Step 2: Post the tweet and attach the `media_id` obtained in Step 1.
-      postResult = await userClient.v2.tweet(content || '', {
+      finalResult = await userClient.v2.tweet(content || '', {
         media: { media_ids: [mediaId] }
       });
     
-    // --- LOGIC FOR TEXT-ONLY TWEETS ---
+    // --- EXISTING LOGIC FOR TEXT-ONLY TWEETS (Unchanged) ---
     } else {
-      postResult = await userClient.v2.tweet(content);
+      finalResult = await userClient.v2.tweet(content);
     }
     
     res.status(200).json({
-      message: 'Tweet posted successfully!',
-      data: postResult.data,
+      message: 'Post successful!',
+      data: finalResult.data,
     });
   } catch (error) {
     // Provide more specific error details from the Twitter API if available
     const errorDetails = error.data?.detail || error.message || 'An unknown error occurred.';
-    console.error('Error posting tweet:', errorDetails);
-    res.status(500).json({ error: 'Failed to post tweet.', details: errorDetails });
+    console.error('Error posting to Twitter:', errorDetails);
+    res.status(500).json({ error: 'Failed to post to Twitter.', details: errorDetails });
   }
 });
 

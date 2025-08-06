@@ -1,6 +1,6 @@
 // File: frontend/src/components/SocialConnector.tsx
 // Developer: Gemini (Experienced Developer)
-// Version: 3.0 - With Manual Thread Composer
+// Version: 3.1 - Restored Connection Status UI
 
 import { useState, useEffect, useRef } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,13 +23,13 @@ export default function SocialConnector() {
   // --- Main content state for LinkedIn & single tweets ---
   const [content, setContent] = useState("");
   
-  // --- NEW: State for Manual Thread tweets ---
+  // --- State for Manual Thread tweets ---
   const [threadTweets, setThreadTweets] = useState<{id: number, text: string}[]>([{ id: 1, text: "" }]);
 
   const [mediaFile, setMediaFile] = useState<File | null>(null);
   const [mediaPreview, setMediaPreview] = useState<string | null>(null);
   const [postingPlatform, setPostingPlatform] = useState<'linkedin' | 'twitter' | 'both' | null>(null);
-  const [showEmojiPicker, setShowEmojiPicker] = useState<number | null>(null); // Track which emoji picker is open
+  const [showEmojiPicker, setShowEmojiPicker] = useState<number | null>(null);
   const [linkedinToken, setLinkedinToken] = useState<string | null>(null);
   const [twitterToken, setTwitterToken] = useState<string | null>(null);
   const [isThreadMode, setIsThreadMode] = useState(false);
@@ -92,7 +92,7 @@ export default function SocialConnector() {
   const combinedThreadTextForLinkedin = threadTweets.map(t => t.text).join('\n\n');
   const isLinkedinOverLimit = (isThreadMode ? combinedThreadTextForLinkedin.length : content.length) > LINKEDIN_CHAR_LIMIT;
 
-  // --- NEW: Handlers for Manual Thread ---
+  // --- Handlers for Manual Thread ---
   const addTweetInput = () => {
     setThreadTweets(prev => [...prev, { id: Date.now(), text: "" }]);
   };
@@ -109,16 +109,14 @@ export default function SocialConnector() {
   
   const onEmojiClick = (emojiObject: EmojiClickData, tweetId?: number) => {
     if (isThreadMode && tweetId) {
-      // Find the specific tweet and add the emoji to its text
       const targetTweet = threadTweets.find(t => t.id === tweetId);
       if(targetTweet) {
         updateTweetText(tweetId, targetTweet.text + emojiObject.emoji);
       }
     } else {
-      // Add emoji to the main content box (for LinkedIn / single tweets)
       setContent(prevContent => prevContent + emojiObject.emoji);
     }
-    setShowEmojiPicker(null); // Close picker after selection
+    setShowEmojiPicker(null);
   };
   
   // --- Other UI Handlers ---
@@ -165,7 +163,7 @@ export default function SocialConnector() {
     }
   };
 
-  // --- Main Post Handler (UPDATED for manual threads) ---
+  // --- Main Post Handler ---
   const handlePost = async (platform: 'linkedin' | 'twitter' | 'both') => {
     const isMainContentEmpty = isThreadMode ? isThreadEmpty : !content.trim();
     if (isMainContentEmpty && !mediaFile) {
@@ -180,11 +178,9 @@ export default function SocialConnector() {
         formData.append('accessToken', token);
 
         if (platformName === 'twitter' && isThreadMode) {
-            // Send the array of tweets. Filter out any that are only whitespace.
             const tweets = threadTweets.map(t => t.text).filter(t => t.trim() !== '');
             formData.append('tweets', JSON.stringify(tweets));
         } else {
-            // For LinkedIn, use the combined thread text or the main content
             const contentForPost = isThreadMode ? combinedThreadTextForLinkedin : content;
             formData.append('content', contentForPost);
             if (mediaFile) {
@@ -218,7 +214,7 @@ export default function SocialConnector() {
           if (isThreadMode) {
               if (isAnyTweetOverLimit) throw new Error("One or more tweets in your thread is over the character limit.");
               if (isThreadEmpty) throw new Error("Cannot post an empty thread.");
-          } else { // Single tweet mode
+          } else {
               if (content.length > TWITTER_CHAR_LIMIT) throw new Error("Post is too long for a single Tweet.");
           }
           postPromises.push(postToPlatform('twitter', twitterToken).then(() => successPlatforms.push("Twitter")));
@@ -230,7 +226,6 @@ export default function SocialConnector() {
         toast({ title: "Success!", description: `Posted successfully to ${successPlatforms.join(' & ')}.` });
       }
       
-      // Reset states
       setContent("");
       setThreadTweets([{ id: 1, text: "" }]);
       removeMedia();
@@ -250,6 +245,7 @@ export default function SocialConnector() {
       <div className="container mx-auto px-4 py-8">
         <div className="max-w-4xl mx-auto space-y-8">
           
+          {/* --- RESTORED: HEADER SECTION --- */}
           <div className="text-center space-y-2">
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
               Social Media Crossposter
@@ -259,23 +255,33 @@ export default function SocialConnector() {
             </p>
           </div>
 
+          {/* --- RESTORED: CONNECTION STATUS SECTION --- */}
           <div>
             <h2 className="text-lg font-semibold text-gray-800 dark:text-gray-200 mb-3">Connection Status</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <Card className={linkedinToken ? "border-green-400" : "border-gray-300"}>{/* ...LinkedIn Card same as before... */}</Card>
-              <Card className={twitterToken ? "border-green-400" : "border-gray-300"}>{/* ...Twitter Card same as before... */}</Card>
+              <Card className={linkedinToken ? "border-green-400" : "border-gray-300"}>
+                <CardContent className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3"><Linkedin className={`h-8 w-8 ${linkedinToken ? 'text-linkedin' : 'text-gray-400'}`} /><div><p className="font-bold">LinkedIn</p>{linkedinToken ? (<span className="flex items-center gap-1 text-sm text-green-600"><CheckCircle className="h-4 w-4" />Connected</span>) : (<span className="flex items-center gap-1 text-sm text-gray-500"><AlertCircle className="h-4 w-4" />Not Connected</span>)}</div></div>
+                  {linkedinToken ? (<Button onClick={() => handleLogout('linkedin')} variant="outline" size="sm" className="gap-2"><LogOut className="h-4 w-4" />Logout</Button>) : (<Button onClick={() => handleLogin('linkedin')} className="gap-2 bg-linkedin hover:bg-linkedin/90 text-white"><Linkedin className="h-4 w-4" />Connect</Button>)}
+                </CardContent>
+              </Card>
+              <Card className={twitterToken ? "border-green-400" : "border-gray-300"}>
+                <CardContent className="p-4 flex items-center justify-between">
+                  <div className="flex items-center gap-3"><Twitter className={`h-8 w-8 ${twitterToken ? 'text-twitter' : 'text-gray-400'}`} /><div><p className="font-bold">Twitter</p>{twitterToken ? (<span className="flex items-center gap-1 text-sm text-green-600"><CheckCircle className="h-4 w-4" />Connected</span>) : (<span className="flex items-center gap-1 text-sm text-gray-500"><AlertCircle className="h-4 w-4" />Not Connected</span>)}</div></div>
+                  {twitterToken ? (<Button onClick={() => handleLogout('twitter')} variant="outline" size="sm" className="gap-2"><LogOut className="h-4 w-4" />Logout</Button>) : (<Button onClick={() => handleLogin('twitter')} className="gap-2 bg-twitter hover:bg-twitter/90 text-white"><Twitter className="h-4 w-4" />Connect</Button>)}
+                </CardContent>
+              </Card>
             </div>
           </div>
           
           <Card className="shadow-lg dark:shadow-primary/10">
             <CardHeader><CardTitle className="flex items-center gap-2"><Send className="h-5 w-5" />Compose Post</CardTitle></CardHeader>
             <CardContent className="space-y-4">
-              {/* --- UPDATED: Main textarea is for LinkedIn / Single Tweets --- */}
               <div className="relative space-y-3">
                 <Textarea 
-                  placeholder={isThreadMode ? "This content is for LinkedIn. Use the Twitter card below to compose your thread." : "What's on your mind?..."} 
+                  placeholder={isThreadMode ? "The combined thread text will appear here for the LinkedIn post." : "What's on your mind?..."} 
                   value={isThreadMode ? combinedThreadTextForLinkedin : content} 
-                  onChange={(e) => setContent(e.target.value)} 
+                  onChange={(e) => !isThreadMode && setContent(e.target.value)} 
                   className="min-h-[140px] resize-none" 
                   disabled={isThreadMode || (!linkedinToken && !twitterToken)}
                 />
@@ -287,7 +293,7 @@ export default function SocialConnector() {
                     <Button variant="ghost" size="icon" title="Attach Media" onClick={() => fileInputRef.current?.click()} disabled={!linkedinToken && !twitterToken}><Paperclip className="h-5 w-5" /></Button>
                     <input type="file" ref={fileInputRef} onChange={handleFileChange} accept="image/*,video/*" className="hidden" />
                     <div className="relative" ref={emojiPickerRef}>
-                      <Button variant="ghost" size="icon" title="Add Emoji to Main Post" onClick={() => setShowEmojiPicker(p => p === 0 ? null : 0)} disabled={!linkedinToken && !twitterToken}><Smile className="h-5 w-5" /></Button>
+                      <Button variant="ghost" size="icon" title="Add Emoji to Main Post" onClick={() => setShowEmojiPicker(p => p === 0 ? null : 0)} disabled={isThreadMode || (!linkedinToken && !twitterToken)}><Smile className="h-5 w-5" /></Button>
                       {showEmojiPicker === 0 && (<div className="absolute z-10 mt-2"><EmojiPicker onEmojiClick={(e) => onEmojiClick(e)} /></div>)}
                     </div>
                  </div>
@@ -348,7 +354,7 @@ export default function SocialConnector() {
                       )}
                     </div>
                     {!isThreadMode && <Badge variant={content.length > TWITTER_CHAR_LIMIT ? "destructive" : "secondary"} className="w-full justify-center py-1">{content.length}/{TWITTER_CHAR_LIMIT}</Badge>}
-                    <Button onClick={() => handlePost('twitter')} disabled={postingPlatform !== null || (isThreadMode ? isThreadEmpty || isAnyTweetOverLimit : !content.trim() && !mediaFile) || !twitterToken}>
+                    <Button onClick={() => handlePost('twitter')} disabled={postingPlatform !== null || !twitterToken || (isThreadMode ? isThreadEmpty || isAnyTweetOverLimit : !content.trim() && !mediaFile)}>
                       {postingPlatform === 'twitter' ? "Posting..." : isThreadMode ? 'Post Thread to Twitter' : 'Post to Twitter'}
                     </Button>
                   </CardContent>
@@ -359,7 +365,8 @@ export default function SocialConnector() {
                 <Button onClick={() => handlePost('both')} disabled={postingPlatform !== null || !canPostToBoth} className="w-full bg-gradient-to-r from-linkedin via-primary to-twitter text-white text-base py-6 disabled:opacity-50">
                    {postingPlatform === 'both' ? <><div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent mr-3" />Posting to Both...</> : <><Share2 className="h-5 w-5 mr-3" />Post to Both Platforms</>}
                 </Button>
-                {!canPostToBoth && <p className="text-xs text-center text-gray-500 mt-2">Connect both accounts and ensure content is within limits to enable this option.</p>}
+                {(!linkedinToken || !twitterToken) && <p className="text-xs text-center text-gray-500 mt-2">Connect both accounts to enable this option.</p>}
+                {linkedinToken && twitterToken && !canPostToBoth && <p className="text-xs text-center text-red-500 mt-2">Content may be empty or over the character limit for one or more platforms.</p>}
               </div>
 
             </CardContent>

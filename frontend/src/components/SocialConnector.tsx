@@ -248,7 +248,7 @@ export default function SocialConnector() {
           {/* --- RESTORED: HEADER SECTION --- */}
           <div className="text-center space-y-2">
             <h1 className="text-4xl md:text-5xl font-bold bg-gradient-to-r from-blue-500 via-purple-500 to-pink-500 bg-clip-text text-transparent">
-              Social Media Crossposter
+              PostEasy
             </h1>
             <p className="text-lg text-gray-600 dark:text-gray-400">
               Write once, post everywhere. Connect your accounts to get started.
